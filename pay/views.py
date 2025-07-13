@@ -17,7 +17,7 @@ def index(request):
 @token_required
 def get_accounts(request):
     if request.method == 'GET':
-        accounts = Account.objects.filter(owner=request.user)
+        accounts = Account.objects.filter(owner=request.user).order_by('-created_at')
         return JsonResponse({'accounts': [{'account_number': account.account_number, 'balance': account.balance, 'currency': account.currency, 'account_type': account.account_type} for account in accounts]})
     else:
         return JsonResponse({'message': 'Invalid request method'}, status=400)
