@@ -16,6 +16,7 @@ import responses
 from decimal import Decimal
 from django.test import Client
 from django.urls import reverse
+import json
 
 
 
@@ -549,10 +550,21 @@ class RestApiTest(unittest.TestCase):
     
     def setUp(self):
         self.client = Client()
+        self.user = User.objects.create_user(username="slon", password="slon3")
 
     def tearDown(self):
         # Vymažeme všechny záznamy z tabulek v databázi
         User.objects.all().delete()
+        ConversionTable.objects.all().delete()
+        Account.objects.all().delete()
+
+
+    def get_auth_token(self, username="slon", password="slon3"):
+        response = self.client.post(reverse('tasks_management:login'), data={
+            "username": username,
+            "password": password
+        }, content_type="application/json")
+        return response.json().get("token")
 
     def test_user_registration_success(self):
         data = {
@@ -563,5 +575,416 @@ class RestApiTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTrue(User.objects.filter(username="hroch").exists())
 
-    
+    def test_login_success(self):
+        data = {"username": "slon", "password": "slon3"}
+        response = self.client.post(reverse('tasks_management:login'), data=data, content_type="application/json") 
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("token", response.json())
         
+    def test_login_wrong_credentials(self):
+        data = {"username": "slon", "password": "hroch"}
+        response = self.client.post(reverse('tasks_management:login'), data=data, content_type="application/json") 
+        response_json = response.json()
+        self.assertEqual(response_json["error"], "Invalid credentials")
+        self.assertEqual(response.status_code, 400)
+    
+    def test_user_exist(self):
+        data = {
+            "username": "slon",
+            "password": "hroch123",
+        }
+        response = self.client.post(reverse('tasks_management:register'), data=data, content_type="application/json") 
+        response_json = response.json()
+        self.assertEqual(response_json["error"], "User already exists")
+        self.assertEqual(response.status_code, 400)
+
+    def test_get_accounts(self):
+        Account.objects.create(owner=self.user, account_type="saving", currency="EUR", balance = 10.00, account_number = "678cd9", created_at=datetime(2023, 1, 1, 10, 0, 0))
+        Account.objects.create(owner=self.user, account_type="regular", currency="CZK", balance = 950.00, account_number = "123ab45", created_at=datetime(2023, 1, 1, 10, 0, 0))
+        token = self.get_auth_token()
+        response = self.client.get(reverse('pay:get_accounts'), HTTP_AUTHORIZATION=f'Bearer {token}')
+        self.assertEqual(response.status_code, 200)
+        response_json = response.json()
+        accounts = response_json.get('accounts')
+        self.assertEqual(len(accounts),2)
+        account_1 = accounts[0]
+        self.assertEqual (account_1["account_number"], '678cd9')
+        self.assertEqual (account_1["balance"], "10.00")
+        self.assertEqual (account_1["currency"], "EUR")
+        self.assertEqual (account_1["account_type"], "saving")
+        account_2 = accounts[1]
+        self.assertEqual (account_2["account_number"], '123ab45')
+        self.assertEqual (account_2["balance"], "950.00")
+        self.assertEqual (account_2["currency"], "CZK")
+        self.assertEqual (account_2["account_type"], "regular")
+
+    def test_get_no_accounts(self):
+        token = self.get_auth_token()
+        response = self.client.get(reverse('pay:get_accounts'), HTTP_AUTHORIZATION=f'Bearer {token}')
+        self.assertEqual(response.status_code, 200)
+        response_json = response.json()
+        accounts = response_json.get('accounts')
+        self.assertEqual(len(accounts),0)
+
+    def test_get_account_types(self):
+        token = self.get_auth_token()
+        response = self.client.get(reverse('pay:get_account_types'), HTTP_AUTHORIZATION=f'Bearer {token}')
+        self.assertEqual(response.status_code, 200)
+        response_json = response.json()
+        account_types = response_json.get('account_types')
+        self.assertEqual(len(account_types),2)
+        self.assertIn("regular", account_types)
+        self.assertIn("savings", account_types)
+    
+    def test_post_account_types(self):
+        token = self.get_auth_token()
+        response = self.client.post(reverse('pay:get_account_types'), HTTP_AUTHORIZATION=f'Bearer {token}')
+        response_json = response.json()
+        self.assertEqual(response_json["message"], "Invalid request method")
+        self.assertEqual(response.status_code, 400)
+
+    def test_get_currencies(self):
+        token = self.get_auth_token()
+        response = self.client.get(reverse('pay:get_currencies'), HTTP_AUTHORIZATION=f'Bearer {token}')
+        self.assertEqual(response.status_code, 200)
+        response_json = response.json()
+        currencies = response_json.get('currencies')
+        self.assertEqual(len(currencies),3)
+        self.assertIn("USD", currencies)
+        self.assertIn("EUR", currencies)
+        self.assertIn("CZK", currencies)
+    
+    def test_post_currencies(self):
+        token = self.get_auth_token()
+        response = self.client.post(reverse('pay:get_currencies'), HTTP_AUTHORIZATION=f'Bearer {token}')
+        response_json = response.json()
+        self.assertEqual(response_json["message"], "Invalid request method")
+        self.assertEqual(response.status_code, 400)
+
+    def test_post_open_account(self):
+        data = {
+            "currency":"USD",
+            "type":"regular"
+        }
+        token = self.get_auth_token()
+        response = self.client.post(reverse('pay:open_account'), data=data, content_type="application/json", HTTP_AUTHORIZATION=f'Bearer {token}')
+        self.assertEqual(response.status_code, 201)
+        response_json = response.json()
+        self.assertEqual (response_json["message"], 'Account opened successfully')
+        self.assertIn("account_number", response_json)
+        # vytahnutí z debilni databeze !!! dulezité podle M - picovina nejvetěí !!!!
+        account_nr = response_json["account_number"]
+        account = Account.objects.get(account_number = account_nr)
+        self.assertEqual(account.balance, 0)
+
+    def test_get_open_account(self):
+        data = {
+            "currency":"USD",
+            "type":"regular"
+        }
+        token = self.get_auth_token()
+        response = self.client.get(reverse('pay:open_account'), data=data, content_type="application/json", HTTP_AUTHORIZATION=f'Bearer {token}')
+        response_json = response.json()
+        self.assertEqual(response_json["message"], "Invalid request method")
+        self.assertEqual(response.status_code, 400)
+
+    def test_post_open_account_not_in_SUPPORTED_ACCOUNT_TYPES(self):
+        data = {
+            "currency":"USD",
+            "type":"financial"
+        }
+        token = self.get_auth_token()
+        response = self.client.post(reverse('pay:open_account'), data=data, content_type="application/json", HTTP_AUTHORIZATION=f'Bearer {token}')
+        response_json = response.json()
+        self.assertEqual(response_json["message"], "Unsupported account type")
+        self.assertEqual(response.status_code, 400)
+    
+    def test_post_open_account_not_in_SUPPORTED_CURRENCIES(self):
+        data = {
+            "currency":"DKK",
+            "type":"savings"
+        }
+        token = self.get_auth_token()
+        response = self.client.post(reverse('pay:open_account'), data=data, content_type="application/json", HTTP_AUTHORIZATION=f'Bearer {token}')
+        response_json = response.json()
+        self.assertEqual(response_json["message"], "Unsupported currency")
+        self.assertEqual(response.status_code, 400)
+
+    def test_post_open_account_not_account_type(self):
+        data = {
+            "currency":"EUR",
+            "type":" "
+        }
+        token = self.get_auth_token()
+        response = self.client.post(reverse('pay:open_account'), data=data, content_type="application/json", HTTP_AUTHORIZATION=f'Bearer {token}')
+        response_json = response.json()
+        self.assertEqual(response_json["message"], "Invalid data")
+        self.assertEqual(response.status_code, 400)
+    
+    def test_post_open_account_not_account_type(self):
+        data = {
+            "currency":" ",
+            "type":"savings"
+        }
+        token = self.get_auth_token()
+        response = self.client.post(reverse('pay:open_account'), data=data, content_type="application/json", HTTP_AUTHORIZATION=f'Bearer {token}')
+        response_json = response.json()
+        self.assertEqual(response_json["message"], "Invalid data")
+        self.assertEqual(response.status_code, 400)
+    
+    def test_post_deposit(self):
+        Account.objects.create(owner=self.user, account_type="saving", currency="EUR", balance = 10.00, account_number = "678cd9", created_at=datetime(2023, 1, 1, 10, 0, 0))
+        token = self.get_auth_token()
+        # URL pro deposit, musí odpovídat tvému urls.py
+        url = reverse('pay:deposit', kwargs={'account_number': '678cd9'})
+        # Data, která chceme poslat (částka vkladu)
+        data = {'amount': '50.00'}
+        # POST request s JSON tělem a autorizací
+        response = self.client.post(
+        url,
+        data=json.dumps(data),
+        content_type='application/json',
+        HTTP_AUTHORIZATION=f'Bearer {token}')
+        # Ověříme, že status je 200 OK
+        self.assertEqual(response.status_code, 200)
+        # Parsujeme JSON odpověď
+        response_json = response.json()
+        # Ověříme, že odpověď obsahuje očekávanou zprávu
+        self.assertEqual(response_json.get('message'), 'Deposit successful')
+        # Ověříme, že nový zůstatek je správný (10 + 50 = 60)
+        self.assertEqual(response_json.get('new_balance'), '60.00')
+        account = Account.objects.get(account_number = '678cd9')
+        self.assertEqual(account.balance, 60)
+
+        
+
+    def test_post_deposit_invalid_amount(self):
+        Account.objects.create(owner=self.user, account_type="saving", currency="EUR", balance = 10.00, account_number = "678cd9", created_at=datetime(2023, 1, 1, 10, 0, 0))
+        token = self.get_auth_token()
+        url = reverse('pay:deposit', kwargs={'account_number': '678cd9'})
+        data = {'amount': '-20.00'}
+        response = self.client.post(
+        url,
+        data=json.dumps(data),
+        content_type='application/json',
+        HTTP_AUTHORIZATION=f'Bearer {token}')
+        self.assertEqual(response.status_code, 400)
+        response_json = response.json()
+        self.assertEqual(response_json.get('message'), "Invalid amount. Must be greater than 0.")
+    
+    def test_post_deposit_invalid_amount_format(self):
+        Account.objects.create(owner=self.user, account_type="saving", currency="EUR", balance = 10.00, account_number = "678cd9", created_at=datetime(2023, 1, 1, 10, 0, 0))
+        token = self.get_auth_token()
+        url = reverse('pay:deposit', kwargs={'account_number': '678cd9'})
+        data = {'amount': 'ab5.00'}
+        response = self.client.post(
+        url,
+        data=json.dumps(data),
+        content_type='application/json',
+        HTTP_AUTHORIZATION=f'Bearer {token}')
+        self.assertEqual(response.status_code, 400)
+        response_json = response.json()
+        self.assertEqual(response_json.get('message'), "Invalid amount format. Must be a valid decimal number.")
+
+    def test_post_deposit_invalid_request_method(self):
+        Account.objects.create(owner=self.user,   account_type="saving", currency="EUR", balance = 10.00, account_number = "678cd9", created_at=datetime(2023, 1, 1, 10, 0, 0))
+        token = self.get_auth_token()
+        url = reverse('pay:deposit', kwargs={'account_number': '678cd9'})
+        data = {'amount': 'ab5.00'}
+        response = self.client.delete(
+        url,
+        data=json.dumps(data),
+        content_type='application/json',
+        HTTP_AUTHORIZATION=f'Bearer {token}')
+        self.assertEqual(response.status_code, 400)
+        response_json = response.json()
+        self.assertEqual(response_json.get('message'), "Invalid request method")
+    
+    def test_post_deposit_account_not_found(self):
+        Account.objects.create(owner=self.user,   account_type="saving", currency="EUR", balance = 10.00, account_number = "678cd9", created_at=datetime(2023, 1, 1, 10, 0, 0))
+        token = self.get_auth_token()
+        url = reverse('pay:deposit', kwargs={'account_number': '12856'})
+        data = {'amount': '5.00'}
+        response = self.client.delete(
+        url,
+        data=json.dumps(data),
+        content_type='application/json',
+        HTTP_AUTHORIZATION=f'Bearer {token}')
+        self.assertEqual(response.status_code, 400)
+        response_json = response.json()
+        self.assertEqual(response_json.get('message'), "Invalid request method")
+
+    def test_post_transfer_invalid_amount_Must_be_greater_than_0(self):
+        Account.objects.create(owner=self.user, account_type="saving", currency="EUR", balance = 10.00, account_number = "678cd9", created_at=datetime(2023, 1, 1, 10, 0, 0))
+        Account.objects.create(owner=self.user, account_type="regular", currency="CZK", balance = 950.00, account_number = "123ab45", created_at=datetime(2023, 1, 1, 10, 0, 0))
+        token = self.get_auth_token()
+        # URL pro deposit, musí odpovídat tvému urls.py
+        url = reverse('pay:transfer', kwargs={'account_number': '678cd9'})
+        data = {'amount': '-5', 
+                'target_account': '123ab45'}
+        response = self.client.post(
+        url,
+        data=json.dumps(data),
+        content_type='application/json',
+        HTTP_AUTHORIZATION=f'Bearer {token}')
+        self.assertEqual(response.status_code, 400)
+        response_json = response.json()
+        self.assertEqual(response_json.get('message'), "Invalid amount. Must be greater than 0.")
+
+    def test_post_transfer_invalid_amount_format(self):   
+        Account.objects.create(owner=self.user, account_type="saving", currency="EUR", balance = 10.00, account_number = "678cd9", created_at=datetime(2023, 1, 1, 10, 0, 0))
+        Account.objects.create(owner=self.user, account_type="regular", currency="CZK", balance = 950.00, account_number = "123ab45", created_at=datetime(2023, 1, 1, 10, 0, 0))
+        token = self.get_auth_token()
+        # URL pro deposit, musí odpovídat tvému urls.py
+        url = reverse('pay:transfer', kwargs={'account_number': '678cd9'})
+        data = {'amount': 'ab5.00', 
+                'target_account': '123ab45'}
+        response = self.client.post(
+        url,
+        data=json.dumps(data),
+        content_type='application/json',
+        HTTP_AUTHORIZATION=f'Bearer {token}')
+        self.assertEqual(response.status_code, 400)
+        response_json = response.json()
+        self.assertEqual(response_json.get('message'), "Invalid amount format. Must be a valid decimal number.")
+
+    def test_post_transfer_cannot_transfer_to_the_same_account(self):
+        Account.objects.create(owner=self.user, account_type="saving", currency="EUR", balance = 10.00, account_number = "678cd9", created_at=datetime(2023, 1, 1, 10, 0, 0))
+        token = self.get_auth_token()
+        # URL pro deposit, musí odpovídat tvému urls.py
+        url = reverse('pay:transfer', kwargs={'account_number': '678cd9'})
+        data = {'amount': '5', 
+                'target_account': '678cd9'}
+        response = self.client.post(
+        url,
+        data=json.dumps(data),
+        content_type='application/json',
+        HTTP_AUTHORIZATION=f'Bearer {token}')
+        self.assertEqual(response.status_code, 400)
+        response_json = response.json()
+        self.assertEqual(response_json.get('message'), "Cannot transfer to the same account")
+    
+    def test_post_transfer_insufficient_funds(self):   
+        Account.objects.create(owner=self.user, account_type="saving", currency="EUR", balance = 10.00, account_number = "678cd9", created_at=datetime(2023, 1, 1, 10, 0, 0))
+        Account.objects.create(owner=self.user, account_type="regular", currency="CZK", balance = 950.00, account_number = "123ab45", created_at=datetime(2023, 1, 1, 10, 0, 0))
+        token = self.get_auth_token()
+        # URL pro deposit, musí odpovídat tvému urls.py
+        url = reverse('pay:transfer', kwargs={'account_number': '678cd9'})
+        data = {'amount': '15', 
+                'target_account': '123ab45'}
+        response = self.client.post(
+        url,
+        data=json.dumps(data),
+        content_type='application/json',
+        HTTP_AUTHORIZATION=f'Bearer {token}')
+        self.assertEqual(response.status_code, 400)
+        response_json = response.json()
+        self.assertEqual(response_json.get('message'), "Insufficient funds")
+    
+    def test_post_transfer_successful(self): 
+        Account.objects.create(owner=self.user, account_type="saving", currency="CZK", balance = 1000.00, account_number = "678cd9", created_at=datetime(2023, 1, 1, 10, 0, 0))
+        Account.objects.create(owner=self.user, account_type="regular", currency="CZK", balance = 950.00, account_number = "123ab45", created_at=datetime(2023, 1, 1, 10, 0, 0))
+        token = self.get_auth_token()
+        url = reverse('pay:transfer', kwargs={'account_number': '678cd9'})
+        data = {'amount': '500.00', 
+                'target_account': '123ab45'}
+        response = self.client.post(
+        url,
+        data=json.dumps(data),
+        content_type='application/json',
+        HTTP_AUTHORIZATION=f'Bearer {token}')
+        self.assertEqual(response.status_code, 200)
+        response_json = response.json()
+        # Ověříme, že odpověď obsahuje očekávanou zprávu
+        self.assertEqual(response_json.get('message'), 'Transfer successful')
+        # vytahnutí z databáze
+        account = Account.objects.get(account_number = '123ab45')
+        self.assertEqual(account.balance, 1450.00)
+        account = Account.objects.get(account_number = '678cd9')
+        self.assertEqual(account.balance, 500.00)
+    
+    def test_post_transfer_successful_different_currency(self): 
+        Account.objects.create(owner=self.user, account_type="saving", currency="EUR", balance = 10.00, account_number = "678cd9", created_at=datetime(2023, 1, 1, 10, 0, 0))
+        Account.objects.create(owner=self.user, account_type="regular", currency="CZK", balance = 8.50, account_number = "123ab45", created_at=datetime(2023, 1, 1, 10, 0, 0))
+        ConversionTable.objects.create(
+             base_currency = 'EUR', target_currency = 'CZK', conversion_rate = 25.25)
+        token = self.get_auth_token()
+        url = reverse('pay:transfer', kwargs={'account_number': '678cd9'})
+        data = {'amount': '2.50', 
+                'target_account': '123ab45'}
+        response = self.client.post(
+        url,
+        data=json.dumps(data),
+        content_type='application/json',
+        HTTP_AUTHORIZATION=f'Bearer {token}')
+        self.assertEqual(response.status_code, 200)
+        response_json = response.json()
+        # Ověříme, že odpověď obsahuje očekávanou zprávu
+        self.assertEqual(response_json.get('message'), 'Transfer successful')
+        # vytahnutí z databáze
+        account = Account.objects.get(account_number = '123ab45')
+        self.assertEqual(account.balance, Decimal('71.63'))
+        account = Account.objects.get(account_number = '678cd9')
+        self.assertEqual(account.balance, 7.50)
+
+    def test_post_account_not_found(self): 
+        Account.objects.create(owner=self.user, account_type="saving", currency="CZK", balance = 1000.00, account_number = "678cd9", created_at=datetime(2023, 1, 1, 10, 0, 0))
+        Account.objects.create(owner=self.user, account_type="regular", currency="CZK", balance = 950.00, account_number = "123ab45", created_at=datetime(2023, 1, 1, 10, 0, 0))
+        token = self.get_auth_token()
+        url = reverse('pay:transfer', kwargs={'account_number': '678cd9'})
+        data = {'amount': '500.00', 
+                'target_account': '123ab45ww'}
+        response = self.client.post(
+        url,
+        data=json.dumps(data),
+        content_type='application/json',
+        HTTP_AUTHORIZATION=f'Bearer {token}')
+        self.assertEqual(response.status_code, 404)
+        response_json = response.json()
+        # Ověříme, že odpověď obsahuje očekávanou zprávu
+        self.assertEqual(response_json.get('message'), 'Account not found')
+
+    def test_post_invalid_request_method_transfer(self): 
+        Account.objects.create(owner=self.user, account_type="saving", currency="CZK", balance = 1000.00, account_number = "678cd9", created_at=datetime(2023, 1, 1, 10, 0, 0))
+        Account.objects.create(owner=self.user, account_type="regular", currency="CZK", balance = 950.00, account_number = "123ab45", created_at=datetime(2023, 1, 1, 10, 0, 0))
+        token = self.get_auth_token()
+        url = reverse('pay:transfer', kwargs={'account_number': '678cd9'})
+        data = {'amount': '500.00', 
+                'target_account': '123ab45'}
+        response = self.client.delete(
+        url,
+        data=json.dumps(data),
+        content_type='application/json',
+        HTTP_AUTHORIZATION=f'Bearer {token}')
+        self.assertEqual(response.status_code, 400)
+        response_json = response.json()
+        # Ověříme, že odpověď obsahuje očekávanou zprávu
+        self.assertEqual(response_json.get('message'), 'Invalid request method')
+        
+        
+
+
+            
+
+
+        
+        
+
+            
+
+
+
+
+        
+
+
+        
+
+
+
+
+
+
+        
+        
+            

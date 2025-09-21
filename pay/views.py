@@ -47,6 +47,8 @@ def open_account(request):
         account_type = data.get('type')
         balance = 0
         currency = data.get('currency')
+        if not account_type.strip() or not currency.strip():
+            return JsonResponse({'message': 'Invalid data'}, status=400)
 
         if account_type not in SUPPORTED_ACCOUNT_TYPES:
             return JsonResponse({'message': 'Unsupported account type'}, status=400)
@@ -54,8 +56,6 @@ def open_account(request):
         if currency not in SUPPORTED_CURRENCIES:
             return JsonResponse({'message': 'Unsupported currency'}, status=400)
 
-        if not account_type or not currency:
-            return JsonResponse({'message': 'Invalid data'}, status=400)
 
         account = Account.objects.create(
             account_number=account_number,
@@ -74,7 +74,6 @@ def deposit(request, account_number):
     if request.method == 'POST':
         data = json.loads(request.body)
         amount = data.get('amount')
-
         try:
             amount = Decimal(amount)
             if amount <= 0:
