@@ -94,6 +94,7 @@ class SeleniumTest(StaticLiveServerTestCase):
         alert_text = alert.text
         self.assertEqual(alert_text, "Account opened successfully!")
         alert.accept() 
+        
         self.selenium.find_element(By.XPATH, '/html/body/div/div/button[1]').click()
         element = self.selenium.find_element(By.XPATH, '/html/body/div/div/div/ul/li')
         text = element.text.strip()
@@ -672,7 +673,7 @@ class RestApiTest(unittest.TestCase):
         response_json = response.json()
         self.assertEqual (response_json["message"], 'Account opened successfully')
         self.assertIn("account_number", response_json)
-        # vytahnutí z debilni databeze !!! dulezité podle M - picovina nejvetěí !!!!
+        # vytahnutí z databeze !!!  
         account_nr = response_json["account_number"]
         account = Account.objects.get(account_number = account_nr)
         self.assertEqual(account.balance, 0)
@@ -960,10 +961,49 @@ class RestApiTest(unittest.TestCase):
         response_json = response.json()
         # Ověříme, že odpověď obsahuje očekávanou zprávu
         self.assertEqual(response_json.get('message'), 'Invalid request method')
+    
+    def test_post_get_transactions(self): 
+        Account.objects.create(owner=self.user, account_type="saving", currency="CZK", balance = 1000.00, account_number = "678cd9", created_at=datetime(2023, 1, 1, 10, 0, 0))
+        Account.objects.create(owner=self.user, account_type="regular", currency="CZK", balance = 950.00, account_number = "123ab45", created_at=datetime(2023, 1, 1, 10, 0, 0))
+        token = self.get_auth_token()
+        response = self.client.post(reverse('pay:get_transactions'),  content_type="application/json", HTTP_AUTHORIZATION=f'Bearer {token}')
+        response_json = response.json()
+        self.assertEqual(response_json["message"], "Invalid request method")
+        self.assertEqual(response.status_code, 400)
+    
+    def test_get_transactions(self): 
+        acc1 = Account.objects.create(owner=self.user, account_type="saving", currency="CZK", balance = 1000.00, account_number = "678cd9", created_at=datetime(2023, 1, 1, 10, 0, 0))
         
-        
-
-
+        for i in range(25):
+            Transaction.objects.create(
+                to_account=acc1,
+                original_amount=10 + i,
+                converted_amount=10 + i,
+                conversion_rate=1,
+                authorized_by=self.user,
+                type="Deposit" if i % 2 == 0 else "Withdrawal",
+                status="Completed",
+                created_at=datetime(2023, 1, 1, 10, 0, 0)
+            )
+        token = self.get_auth_token()
+        response = self.client.get(reverse('pay:get_transactions')+ "?page=1&pageSize=10",  content_type="application/json", HTTP_AUTHORIZATION=f'Bearer {token}')
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(len(data["transactions"]), 10)  
+        self.assertEqual(data["total_pages"], 3)
+        x = data["transactions"][0]
+        self.assertEqual(x["to_account"], "678cd9")
+        self.assertEqual(x["original_amount"], "10.00")  
+        self.assertEqual(x["converted_amount"], "10.00")
+        self.assertEqual(x["type"], "Deposit")
+        self.assertEqual(x["status"], "Completed")
+ 
+        z = data["transactions"][9]
+        self.assertEqual(z["to_account"], "678cd9")
+        self.assertEqual(z["original_amount"], "19.00")  
+        self.assertEqual(z["converted_amount"], "19.00")
+        self.assertEqual(z["type"], "Withdrawal")
+        self.assertEqual(z["status"], "Completed")
             
 
 

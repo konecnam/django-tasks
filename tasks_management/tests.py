@@ -99,6 +99,8 @@ class RestApiTest(unittest.TestCase):
         self.assertEqual(register["error"], "User already exists")
         self.assertEqual(response.status_code, 400)
 
+    
+    #pomocná funkce - posílá request a získám token
     def get_auth_token(self, username="KacKac", password="Hroch2"):
         response = self.client.post(reverse('tasks_management:login'), data={
             "username": username,
@@ -269,6 +271,7 @@ class RestApiTest(unittest.TestCase):
             HTTP_AUTHORIZATION=f'Bearer {token}')
         project_response = response.json()
         self.assertEqual(response.status_code, 200)
+        # kontrola, že se řádek 276 hodí chybu Project.DoesNotExist
         with self.assertRaises(Project.DoesNotExist):
             Project.objects.get(id = project.id)
         self.assertEqual(project_response["message"], "Project deleted")
