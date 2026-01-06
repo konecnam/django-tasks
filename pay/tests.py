@@ -673,7 +673,7 @@ class RestApiTest(unittest.TestCase):
         response_json = response.json()
         self.assertEqual (response_json["message"], 'Account opened successfully')
         self.assertIn("account_number", response_json)
-        # vytahnutí z databeze !!!  
+        # vytahnutí z  databeze !!!  
         account_nr = response_json["account_number"]
         account = Account.objects.get(account_number = account_nr)
         self.assertEqual(account.balance, 0)
@@ -1004,7 +1004,48 @@ class RestApiTest(unittest.TestCase):
         self.assertEqual(z["converted_amount"], "19.00")
         self.assertEqual(z["type"], "Withdrawal")
         self.assertEqual(z["status"], "Completed")
-            
+
+    @responses.activate
+    def test_send_money_between_other_accounts_USD_vs_CZK_json_mock(self):
+        # využiji mockovaní 
+        rsp1 = responses.Response(
+        method="GET",
+        url="https://open.er-api.com/v6/latest/USD", 
+        # nevolám na tuto url, ale vracím json a status
+        json={
+            "result": "success",
+            "rates": {
+                "CZK": 22, 
+                "USD":1,
+            }
+        },
+        status=200)
+        responses.add(rsp1)
+        Account.objects.create(owner=self.user, account_type="saving", currency="USD", balance = 10.00, account_number = "678cd9", created_at=datetime(2023, 1, 1, 10, 0, 0))
+        Account.objects.create(owner=self.user, account_type="regular", currency="CZK", balance = 80.00, account_number = "123ab45", created_at=datetime(2023, 1, 1, 10, 0, 0))
+        token = self.get_auth_token()
+
+        response = self.client.post(
+            reverse('pay:transfer', kwargs={'account_number': '678cd9'}),
+            json.dumps({'amount': '2.50', 
+                'target_account': '123ab45'}),
+            content_type='application/json',
+            HTTP_AUTHORIZATION=f'Bearer {token}')
+        self.assertEqual(response.status_code, 200)
+        response_json = response.json()
+        self.assertEqual(response_json.get('message'), "Transfer successful")
+        # vytahnutí z databáze
+        account = Account.objects.get(account_number = '678cd9')
+        self.assertEqual(account.balance, 7.50)
+        account = Account.objects.get(account_number = '123ab45')
+        self.assertEqual(account.balance, 135.00)
+        # zda je to opravdu v databazi
+        rate = ConversionTable.objects.get(base_currency = 'USD', target_currency = 'CZK')
+        self.assertIsNotNone(rate)
+        self.assertEqual(rate.conversion_rate, 22.00)
+        
+
+
 
 
         
