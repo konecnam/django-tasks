@@ -121,7 +121,7 @@ class SeleniumTest(StaticLiveServerTestCase):
         self.assertTrue(text.startswith("regular ("))
         self.assertTrue(text.endswith(": 0.00 EUR"))
     
-    def test_creation_account_regular_EUR(self):
+    def test_creation_account_regular_EUR_2(self):
         user = User.objects.get(username="Gloria")  
         Account.objects.create(owner=user, account_type="regular", currency="USD", balance = 50, account_number = "123ab45")
         Account.objects.create(owner=user, account_type="savings", currency="CZK", balance = 30000, account_number= "54ba321")
@@ -167,6 +167,7 @@ class SeleniumTest(StaticLiveServerTestCase):
         creat_acounts = creat_acounts.text.strip()
         self.assertTrue(creat_acounts.startswith("regular ("))
         self.assertTrue(creat_acounts.endswith(": 20.00 USD"))
+
 
     def test_send_money_beetween_my_acounts(self):
         user = User.objects.get(username="Gloria")  
