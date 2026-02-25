@@ -5,6 +5,7 @@
   },
   "scripts": {},
   "dependencies": {
+    "better-sqlite3": "^12.6.2",
     "sqlite3": "^5.1.7"
   }
 }

@@ -1,8 +1,16 @@
 import { test, expect, Page } from '@playwright/test';
-import sqlite3 from 'sqlite3';
+// import sqlite3 from 'sqlite3';
+import Database from 'better-sqlite3';
 
 
 test.beforeEach(async () => {
+  const db = new Database('db.sqlite3');
+  db.prepare('delete from pay_transaction').run();
+   db.prepare('delete from pay_account').run();
+  db.prepare('delete from pay_conversiontable').run();
+  db.prepare("delete FROM tasks_management_user where username = 'test_melman'").run();
+  db.prepare("delete FROM tasks_management_user where username = 'Emma'").run();
+  db.close();
   await create_user('Emma', 'elephant')
 //   const response = await fetch('http://127.0.0.1:8000/tasks/api/register', {
 //   method: 'POST',
@@ -17,17 +25,7 @@ test.beforeEach(async () => {
 });
 
 test.afterEach(async () => {
-  // 🔹 připojení k SQLite DB
-  const db = new sqlite3.Database('db.sqlite3'); // cesta k tvé Django DB
-
-  // 🔹 spuštění SQL dotazů
-  db.run('delete FROM tasks_management_user where username = "test_melman"');
-  db.run('delete FROM tasks_management_user where username = "Emma"');
-  db.run('delete from pay_account');
-  db.run('delete from pay_conversiontable');
-
-  // 🔹 zavření DB
-  db.close();
+  
 });
 
 export async function login(
@@ -58,10 +56,55 @@ export async function account_create(
   created_at: string
 
 ){
-  const db = new sqlite3.Database('db.sqlite3');
-  db.run(`INSERT INTO pay_account (owner_id, account_type, currency, balance, account_number, updated_at, created_at)VALUES ((select id from tasks_management_user where username='${username}'), '${account_type}', '${currency}', ${balance}, '${account_number}', '${updated_at}', '${created_at}')`);
+  const db = new Database('db.sqlite3');
+  const stmt = db.prepare(`
+    INSERT INTO pay_account (owner_id, account_type, currency, balance, account_number, updated_at, created_at)VALUES ((select id from tasks_management_user where username= ?), ?, ?, ?, ?, ?, ?)
+    `);
+   stmt.run(
+    username,
+    account_type,
+    currency,
+    balance,
+    account_number,
+    updated_at,
+    created_at,
+  );
   db.close();
 }
+
+export async function transaction_create(
+  original_amount: string, 
+  converted_amount: string, 
+  conversion_rate: string, 
+  username: string, 
+  from_account_number: string, 
+  to_account_number: string,
+  status: string,
+  type: string, 
+  created_at: string,
+)
+{
+  const db = new Database('db.sqlite3');
+  const stmt = db.prepare(
+    `INSERT INTO pay_transaction (authorized_by_id, from_account_id, to_account_id, original_amount, converted_amount, conversion_rate, status, type, created_at)
+  VALUES ((select id from tasks_management_user where username=?), 
+  (select id from pay_account where account_number=?),
+  (select id from pay_account where account_number=?),
+   ?, ?, ?, ?, ?, ?)`);
+   stmt.run(
+    username,
+    from_account_number,
+    to_account_number,
+    original_amount,
+    converted_amount,
+    conversion_rate, 
+    status,
+    type, 
+    created_at,
+  );
+  db.close();
+}
+
 
 export async function create_user(username: string, password: string) {
   const response = await fetch('http://127.0.0.1:8000/tasks/api/register', {
@@ -81,9 +124,17 @@ export async function conversion_rate_create (
   conversion_rate: number, 
   updated_at: string
 
-){
-  const db = new sqlite3.Database('db.sqlite3');
-  db.run(`INSERT INTO pay_conversiontable (base_currency, target_currency, conversion_rate, updated_at) Values ('${base_currency}', '${target_currency}', '${conversion_rate}', '${updated_at}')`);
+)
+{
+  const db = new Database('db.sqlite3');
+  const stmt = db.prepare(
+    `INSERT INTO pay_conversiontable (base_currency, target_currency, conversion_rate, updated_at) Values (?, ?, ?, ?)`);
+   stmt.run(
+    base_currency,
+    target_currency,
+    conversion_rate,
+    updated_at,
+  );
   db.close();
 }
 
@@ -388,4 +439,165 @@ test('send money beetween other acounts CZK vs CZK flow', async ({ page }) => {
   const Laura_Account = await page.locator('xpath=/html/body/div/div/div/ul/li');
   await expect(Laura_Account).toHaveText(`savings (xxvv55): 137.18 EUR`)
 });
+
+test('send money beetween other acounts EUR vs USD invalid number acount flow', async ({ page }) => {
+  await create_user ('Peter', 'HippoBlue7')
+  await account_create('savings', 'EUR', 'xxvv55', 4856.78, '2025-02-01', 'Peter', '2026-02-01');
+
+  await account_create ('regular', 'USD', 'ww99op', 6595.45, '2024-02-01', 'Emma', '2024-02-01');
+  const today = new Date().toISOString().slice(0, 10);
+  await conversion_rate_create('USD', 'EUR', 0.84, today);
+  await login(page);
+  await page.locator('xpath=/html/body/div/div/button[4]').click();
+  await page.locator('xpath=/html/body/div/div/div/div/button[2]').click();
+
+  await page.selectOption('xpath=//*[@id="account"]', {label: 'regular (ww99op) - 6595.45 USD'});
+  await page.fill('xpath=//*[@id="targetAccount"]', 'xxvv55x');
+  await page.fill('xpath=//*[@id="amount"]', '146.68');
+  await page.locator('xpath=/html/body/div/div/div/form/button').click();
+
+  const dialog = await page.waitForEvent('dialog');
+  expect(dialog.message()).toBe('Failed to send money. Please try again.');
+  await dialog.accept();
+
+  await page.fill('xpath=//*[@id="targetAccount"]', 'xxvv55');
+  await page.locator('xpath=/html/body/div/div/div/form/button').click();
+
+  await page.locator('xpath=/html/body/div/div/button[1]').click();
+  const newAccount_regular = await page.locator('xpath=/html/body/div/div/div/ul/li[1]');
+  await expect(newAccount_regular).toHaveText(`regular (ww99op): 6448.77 USD`);
+  await page.locator('xpath=/html/body/div/div/button[6]').click();
+
+  await login (page, 'Peter', 'HippoBlue7');
+  const Laura_Account = await page.locator('xpath=/html/body/div/div/div/ul/li');
+  await expect(Laura_Account).toHaveText(`savings (xxvv55): 4979.99 EUR`)
+});
+
+test('transactions my acconout add money', async ({ page }) => {
+  await account_create ('savings', 'CZK', '123ab45', 0, '2025-02-01', 'Emma', '2026-02-01');
+  await login(page);
+  await page.locator('xpath=/html/body/div/div/button[3]').click();
+  await page.selectOption('xpath=//*[@id="account"]', {label: 'savings (123ab45) - 0.00 CZK'});
+  await page.fill('xpath=//*[@id="amount"]', '100');
+  await page.locator('xpath=/html/body/div/div/div/form/button').click();
+
+  const dialog = await page.waitForEvent('dialog');
+  expect(dialog.message()).toBe('Money added successfully!');
+  await dialog.accept();
+
+  await page.locator('xpath= /html/body/div/div/button[5]').click()
+  const completed  = await page.locator('xpath=/html/body/div/div/div/ul/li/div[1]');
+  await expect(completed ).toHaveText(/^Completed at \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
+  const deposit  = await page.locator('xpath=/html/body/div/div/div/ul/li/div[2]');
+  await expect(deposit ).toHaveText('Deposit');
+  const acconout  = await page.locator('xpath=/html/body/div/div/div/ul/li/div[3]');
+  await expect(acconout).toHaveText('To: 123ab45');
+  const currency  = await page.locator('xpath=/html/body/div/div/div/ul/li/div[4]/div');
+  await expect(currency).toHaveText('100.00 CZK');
+});
+
+test('transactions send money beetween other acounts EUR vs USD flow', async ({ page }) => {
+  await create_user ('Peter', 'HippoBlue7')
+  await account_create('savings', 'EUR', 'xxvv55', 56.78, '2025-02-01', 'Peter', '2026-02-01');
+
+  await account_create ('regular', 'USD', 'ww99op', 95.45, '2024-02-01', 'Emma', '2024-02-01');
+  const today = new Date().toISOString().slice(0, 10);
+  await conversion_rate_create('USD', 'EUR', 0.84, today);
+  await login(page);
+  await page.locator('xpath=/html/body/div/div/button[4]').click();
+  await page.locator('xpath=/html/body/div/div/div/div/button[2]').click();
+
+  await page.selectOption('xpath=//*[@id="account"]', {label: 'regular (ww99op) - 95.45 USD'});
+  await page.fill('xpath=//*[@id="targetAccount"]', 'xxvv55');
+  await page.fill('xpath=//*[@id="amount"]', '46.68');
+  await page.locator('xpath=/html/body/div/div/div/form/button').click();
+
+  const dialog = await page.waitForEvent('dialog');
+  expect(dialog.message()).toBe('Money sent successfully!');
+  await dialog.accept();
+
+  await page.locator('xpath= /html/body/div/div/button[5]').click()
+  const completed  = await page.locator('xpath=/html/body/div/div/div/ul/li/div[1]');
+  await expect(completed ).toHaveText(/^Completed at \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
+  const deposit  = await page.locator('xpath=/html/body/div/div/div/ul/li[1]/div[2]');
+  await expect(deposit ).toHaveText('From: ww99op');
+  const acconout  = await page.locator('xpath=/html/body/div/div/div/ul/li/div[3]');
+  await expect(acconout).toHaveText('To: xxvv55');
+  const currency  = await page.locator('xpath=/html/body/div/div/div/ul/li[1]/div[4]/div');
+  await expect(currency).toHaveText('46.68 USD (39.21 EUR)');
+  });
+
+test('transactions send money beetween other acounts EUR vs USD flow more money', async ({ page }) => {
+  await create_user ('Peter', 'HippoBlue7')
+  await account_create('savings', 'EUR', 'xxvv55', 66.78, '2025-02-01', 'Peter', '2026-02-01');
+
+  await account_create ('regular', 'USD', 'ww99op', 5.45, '2024-02-01', 'Emma', '2024-02-01');
+  const today = new Date().toISOString().slice(0, 10);
+  await conversion_rate_create('USD', 'EUR', 0.84, today);
+  await login(page);
+  await page.locator('xpath=/html/body/div/div/button[4]').click();
+  await page.locator('xpath=/html/body/div/div/div/div/button[2]').click();
+
+  await page.selectOption('xpath=//*[@id="account"]', {label: 'regular (ww99op) - 5.45 USD'});
+  await page.fill('xpath=//*[@id="targetAccount"]', 'xxvv55');
+  await page.fill('xpath=//*[@id="amount"]', '20.00');
+  await page.locator('xpath=/html/body/div/div/div/form/button').click();
+
+  const dialog = await page.waitForEvent('dialog');
+  expect(dialog.message()).toBe('Failed to send money. Please try again.');
+  await dialog.accept();
+
+  await page.locator('xpath= /html/body/div/div/button[5]').click()
+  const completed  = await page.locator('xpath=/html/body/div/div/div/ul/li[1]/div[1]');
+  await expect(completed ).toHaveText(/^Failed \(insufficient funds\) at \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
+  const deposit  = await page.locator('xpath=/html/body/div/div/div/ul/li[1]/div[2]');
+  await expect(deposit ).toHaveText('From: ww99op');
+  const acconout  = await page.locator('xpath=/html/body/div/div/div/ul/li/div[3]');
+  await expect(acconout).toHaveText('To: xxvv55');
+  const currency  = await page.locator('xpath=/html/body/div/div/div/ul/li[1]/div[4]/div');
+  await expect(currency).toHaveText('20.00 USD (16.80 EUR)');
+  });
+
+
+test ('transactions send authorized next_previous', async ({ page }) => {
+  await account_create ('savings', 'CZK', '123ab45', 700.00 , '2025-02-01', 'Emma', '2026-02-01');
+  await account_create ('regular', 'CZK', '000555', 200.00 , '2025-02-01', 'Emma', '2026-02-01');
+
+  await transaction_create('20.00', '20.00', '1', 'Emma', '123ab45', '000555', 'Completed', 'Deposit', '2022-02-01')
+  for (let i = 0; i < 11; i++) {
+    await transaction_create('10.00', '10.00', '1', 'Emma', '123ab45', '000555', 'Completed', 'Deposit', '2023-02-01')
+    }
+  await transaction_create('5.00', '5.00', '1', 'Emma', '123ab45', '000555', 'Completed', 'Deposit', '2024-02-01')
+  await login(page);
+
+  await page.locator('xpath=/html/body/div/div/button[5]').click();
+  await page.locator('xpath=/html/body/div/div/div/div[1]/button[2]').click();
+  const completed_last  = await page.locator('xpath=/html/body/div/div/div/ul/li[3]/div[1]');
+  await expect(completed_last ).toHaveText('Completed at 2022-02-01 00:00:00');
+
+  const deposit_last  = await page.locator('xpath=/html/body/div/div/div/ul/li[3]/div[2]');
+  await expect(deposit_last).toHaveText('From: 123ab45');
+
+  const to_last  = await page.locator('xpath=/html/body/div/div/div/ul/li[3]/div[3]');
+  await expect(to_last ).toHaveText('To: 000555');
+
+  const money_last  = await page.locator('xpath=/html/body/div/div/div/ul/li[3]/div[4]/div');
+  await expect(money_last ).toHaveText('20.00 CZK')
+
+  await page.locator('xpath=/html/body/div/div/div/div[1]/button[1]').click();
+  
+  const completed_first  = await page.locator('xpath=/html/body/div/div/div/ul/li[1]/div[1]');
+  await expect(completed_first ).toHaveText('Completed at 2024-02-01 00:00:00');
+
+  const deposit_first  = await page.locator('xpath=/html/body/div/div/div/ul/li[1]/div[2]');
+  await expect(deposit_first).toHaveText('From: 123ab45');
+
+  const to_first  = await page.locator('xpath=/html/body/div/div/div/ul/li[1]/div[3]');
+  await expect(to_first).toHaveText('To: 000555');
+
+  const money_first  = await page.locator('xpath=/html/body/div/div/div/ul/li[1]/div[4]/div');
+  await expect(money_first ).toHaveText('5.00 CZK')
+});
+ 
+        
 
