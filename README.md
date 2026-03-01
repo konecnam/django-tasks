@@ -4,6 +4,21 @@
 
 Install libraries: `pip install -r requirements.txt`
 
+## tests
+
+all tests: `python manage.py test`
+
+one class: `python manage.py test pay.tests.RestApiTest`
+
+one class one test: `python manage.py test pay.tests.RestApiTest.test_login_wrong_credentials`
+
+### App
+server: `python manage.py runserver`
+
+### Playwright - 
+server: `npx playwright test --workers=1`
+
+
 ## Endpoints
 
 ### 1. Login
